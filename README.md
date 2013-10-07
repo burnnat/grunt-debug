@@ -9,7 +9,7 @@ Usage
 Ensure you have the debug plugin enabled in your Gruntfile via:
 
 ```js
-grunt.loadNpmTasks(key);
+grunt.loadNpmTasks('grunt-debug');
 ```
 
 Then you can debug a series of grunt tasks (say tasks named `first` and `second`) by running:
