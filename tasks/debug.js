@@ -83,10 +83,10 @@ module.exports = function(grunt) {
 			'message',
 			function(data) {
 				if (data.event === 'SERVER.LAUNCHING') {
-					console.log('Node Inspector v%s', data.version);
+					grunt.log.ok('Starting Node Inspector v%s', data.version);
 				}
 				else if (data.event === 'SERVER.LISTENING') {
-					console.log('Visit %s to start debugging.', data.address.url);
+					grunt.log.ok('Visit %s to start debugging.', data.address.url);
 					
 					if (!requireConnect) {
 						deferred.resolve(data.address);
@@ -98,7 +98,16 @@ module.exports = function(grunt) {
 					}
 				}
 				else if (data.event === 'SERVER.ERROR') {
-					deferred.reject(data.error);
+					var error = data.error;
+					
+					grunt.log.error(data.message);
+					
+					if (error.code === 'EADDRINUSE') {
+						grunt.log.error('There is another process already listening at this address.');
+						grunt.log.error('Specify `inspectorArgs: { "web-port": port }` to use a different port.');
+					}
+					
+					deferred.reject(error);
 				}
 			}
 		);
@@ -119,7 +128,7 @@ module.exports = function(grunt) {
 		var done = this.async();
 		
 		var options = this.options({
-			fork: false,
+			fork: true,
 			inspector: false,
 			inspectorArgs: {}
 		});
@@ -158,9 +167,12 @@ module.exports = function(grunt) {
 					done();
 				},
 				function(error) {
-					var status = error instanceof Error
-						? error
-						: false;
+					var status = false;
+					
+					if (error instanceof Error) {
+						status = error;
+						grunt.log.error(error);
+					}
 					
 					done(status);
 				}

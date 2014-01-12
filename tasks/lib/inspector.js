@@ -1,5 +1,6 @@
 var fs = require('fs');
 var path = require('path');
+var util = require('util');
 
 var DebugServer = require('node-inspector/lib/debug-server.js').DebugServer;
 var config = require('node-inspector/lib/config.js');
@@ -42,23 +43,15 @@ debugServer.wsServer.sockets.on(
 );
 
 function onError(err) {
-	console.error(
-		'Cannot start the server at %s:%s. Error: %s.',
-		config.webHost || '0.0.0.0',
-		config.webPort,
-		err.message || err
-	);
-
-	if (err.code === 'EADDRINUSE') {
-		console.error(
-			'There is another process already listening at this address.\n' +
-			'Run `node-inspector --web-port={port}` to use a different port.'
-		);
-	}
-
 	notifyParentProcess({
 		event: 'SERVER.ERROR',
-		error: err
+		error: err,
+		message: util.format(
+			'Cannot start the server at %s:%s. Error: %s.',
+			config.webHost || '0.0.0.0',
+			config.webPort,
+			err.message || err
+		)
 	});
 }
 
