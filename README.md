@@ -29,7 +29,11 @@ grunt debug:break first second
 
 * __fork__ : Boolean
 
-  If enabled, spawns a new Grunt process with debugging enabled via Node's `--debug` parameter. Otherwise, debugging will be enabled on the current process using the `SIGUSR1` signal. Defaults to `true`.
+  If enabled, spawns a new Grunt process with debugging enabled via Node's `--debug` parameter. Otherwise, debugging will be enabled on the current process using the `SIGUSR1` signal. Defaults to `false`.
+
+* __debugChildren__ : Boolean
+
+  If enabled, automatically starts debugging for child node processes created using `fork` or `spawn` commands. Defaults to `true`.
 
 * __inspector__ : Boolean
 
