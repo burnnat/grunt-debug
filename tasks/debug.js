@@ -1,3 +1,6 @@
+var hooks = require('./lib/hooks.js');
+hooks.hookChildren();
+
 var child_process = require('child_process');
 var path = require('path');
 var Q = require('q');
@@ -6,6 +9,8 @@ var util = require('util');
 var Inspector = require('./lib/inspector.js').Inspector;
 
 module.exports = function(grunt) {
+	hooks.hookGrunt(grunt);
+	
 	/**
 	 * Manually forks the Grunt process for debugging
 	 */
@@ -62,48 +67,24 @@ module.exports = function(grunt) {
 	};
 	
 	/**
-	 * Monkey-patch `fork` function to enable debugging on child processes.
+	 * Enabled debugging hooks for child processes
 	 */
-	var hookChildren = function(brk) {
-		var port = 5859;
-		var original = child_process.fork;
-		
-		var replacement = function(module, preargs, preoptions) {
-			var args, options;
-			
-			if (util.isArray(preargs)) {
-				args = preargs;
-				options = util._extend({}, preoptions);
+	var enableHooks = function(brk) {
+		hooks.enableHooks(
+			brk,
+			function(module, port) {
+				grunt.log.ok('Debugging forked process %s on port %d', module, port);
 			}
-			else {
-				args = [];
-				options = util._extend({}, preargs);
-			}
-			
-			grunt.log.ok('Debugging forked process %s on port %d', module, port)
-			
-			options.execArgv = options.execArgv || [];
-			options.execArgv.unshift(
-				(brk
-					? '--debug-brk'
-					: '--debug')
-				+ '='
-				+ (port++)
-			);
-			
-			return original.call(this, module, args, options);
-		};
-		
-		child_process.fork = replacement;
+		);
 	};
 	
 	grunt.registerTask('debug', function(type) {
 		if (type === 'hook') {
-			hookChildren(false);
+			enableHooks(false);
 			return;
 		}
 		else if (type === 'hook-break') {
-			hookChildren(true);
+			enableHooks(true);
 			return;
 		}
 		
@@ -168,7 +149,7 @@ module.exports = function(grunt) {
 					
 					if (options.debugChildren) {
 						promise = promise.then(function() {
-							hookChildren(brk);
+							enableHooks(brk);
 						});
 					}
 					
