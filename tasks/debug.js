@@ -1,22 +1,29 @@
 var child_process = require('child_process');
 var path = require('path');
 var Q = require('q');
+var util = require('util');
+
+var Inspector = require('./lib/inspector.js').Inspector;
 
 module.exports = function(grunt) {
 	/**
 	 * Manually forks the Grunt process for debugging
 	 */
-	var forkGrunt = function(brk, name) {
+	var forkGrunt = function(name, brk, debugChildren) {
 		var deferred = Q.defer();
 		var args = process.argv;
 		
 		grunt.task.clearQueue();
 		
+		var tasks = args.slice(args.indexOf(name) + 1);
+		
+		if (debugChildren) {
+			tasks.unshift('debug:hook' + (brk ? '-break' : ''));
+		}
+		
 		var child = child_process.fork(
 			args[1],
-			args.slice(
-				args.indexOf(name) + 1
-			),
+			tasks,
 			{
 				execArgv: [
 					brk
@@ -41,7 +48,7 @@ module.exports = function(grunt) {
 	/**
 	 * Sets up existing Grunt process for debugging
 	 */
-	var debugGrunt = function(brk) {
+	var debugGrunt = function() {
 		var pid = process.pid;
 		
 		return Q.fcall(function() {
@@ -55,80 +62,56 @@ module.exports = function(grunt) {
 	};
 	
 	/**
-	 * Initializes a node-inspector instance
+	 * Monkey-patch `fork` function to enable debugging on child processes.
 	 */
-	var startInspector = function(params, requireConnect) {
-		var deferred = Q.defer();
+	var hookChildren = function(brk) {
+		var port = 5859;
+		var original = child_process.fork;
 		
-		try {
-			require.resolve('node-inspector/bin/inspector');
-		}
-		catch (e) {
-			deferred.reject('Unable to locate node-inspector package.');
-			return deferred.promise;
-		}
-		
-		var args = [];
-		
-		for (var key in params) {
-			args.push('--' + key, params[key]);
-		}
-		
-		var child = child_process.fork(
-			path.join(__dirname, 'lib/inspector.js'),
-			args
-		);
-		
-		child.on(
-			'message',
-			function(data) {
-				if (data.event === 'SERVER.LAUNCHING') {
-					grunt.log.ok('Starting Node Inspector v%s', data.version);
-				}
-				else if (data.event === 'SERVER.LISTENING') {
-					grunt.log.ok('Visit %s to start debugging.', data.address.url);
-					
-					if (!requireConnect) {
-						deferred.resolve(data.address);
-					}
-				}
-				else if (data.event === 'SERVER.CONNECTED') {
-					if (requireConnect) {
-						deferred.resolve();
-					}
-				}
-				else if (data.event === 'SERVER.ERROR') {
-					var error = data.error;
-					
-					grunt.log.error(data.message);
-					
-					if (error.code === 'EADDRINUSE') {
-						grunt.log.error('There is another process already listening at this address.');
-						grunt.log.error('Specify `inspectorArgs: { "web-port": port }` to use a different port.');
-					}
-					
-					deferred.reject(error);
-				}
+		var replacement = function(module, preargs, preoptions) {
+			var args, options;
+			
+			if (util.isArray(preargs)) {
+				args = preargs;
+				options = util._extend({}, preoptions);
 			}
-		);
-		
-		child.on(
-			'exit',
-			function(code) {
-				if (code != 0) {
-					deferred.reject(code);
-				}
+			else {
+				args = [];
+				options = util._extend({}, preargs);
 			}
-		);
+			
+			grunt.log.ok('Debugging forked process %s on port %d', module, port)
+			
+			options.execArgv = options.execArgv || [];
+			options.execArgv.unshift(
+				(brk
+					? '--debug-brk'
+					: '--debug')
+				+ '='
+				+ (port++)
+			);
+			
+			return original.call(this, module, args, options);
+		};
 		
-		return deferred.promise;
+		child_process.fork = replacement;
 	};
 	
 	grunt.registerTask('debug', function(type) {
+		if (type === 'hook') {
+			hookChildren(false);
+			return;
+		}
+		else if (type === 'hook-break') {
+			hookChildren(true);
+			return;
+		}
+		
 		var done = this.async();
 		
 		var options = this.options({
-			fork: true,
+			fork: false,
+			debugChildren: true,
 			inspector: false,
 			inspectorArgs: {}
 		});
@@ -136,36 +119,72 @@ module.exports = function(grunt) {
 		var nameArgs = this.nameArgs;
 		var brk = (type === 'break');
 		
+		var inspector;
+		
+		if (options.inspector) {
+			inspector = new Inspector();
+			
+			inspector.on(
+				'launching',
+				function(version) {
+					grunt.log.ok('Starting Node Inspector v%s', version);
+				}
+			);
+			
+			inspector.on(
+				'listening',
+				function(address) {
+					grunt.log.ok('Visit %s to start debugging.', address);
+				}
+			);
+			
+			inspector.on(
+				'error',
+				function(error) {
+					grunt.log.error(error);
+				}
+			);
+		}
+		else {
+			inspector = {
+				launch: function() {},
+				connect: function() {}
+			};
+		}
+		
 		Q()
 			.then(function() {
 				if (options.fork) {
 					return Q.all([
-						forkGrunt(brk, nameArgs),
-						options.inspector
-							? startInspector(options.inspectorArgs, false)
-							: null
+						forkGrunt(nameArgs, brk, options.debugChildren),
+						inspector.launch(options.inspectorArgs)
 					]);
 				}
 				else {
-					return (
-						debugGrunt(brk)
+					promise = debugGrunt()
+						.thenResolve(
+							inspector.launch(options.inspectorArgs)
+						);
+					
+					if (options.debugChildren) {
+						promise = promise.then(function() {
+							hookChildren(brk);
+						});
+					}
+					
+					if (brk) {
+						promise = promise
+							.thenResolve(inspector.connect())
 							.then(function() {
-								if (options.inspector) {
-									return startInspector(options.inspectorArgs, brk);
-								}
-							})
-							.then(function() {
-								if (brk) {
-									debugger;
-								}
-							})
-					);
+								debugger;
+							});
+					}
+					
+					return promise;
 				}
 			})
 			.done(
-				function() {
-					done();
-				},
+				done,
 				function(error) {
 					var status = false;
 					

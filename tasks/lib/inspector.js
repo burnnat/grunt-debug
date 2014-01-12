@@ -1,75 +1,119 @@
-var fs = require('fs');
+var EventEmitter = require('events').EventEmitter;
+var child_process = require('child_process');
 var path = require('path');
 var util = require('util');
+var Q = require('q');
 
-var DebugServer = require('node-inspector/lib/debug-server.js').DebugServer;
-var config = require('node-inspector/lib/config.js');
-var packageJson = require('node-inspector/package.json');
+function Inspector() {
+	EventEmitter.call(this);
+};
 
-var notifyParentProcess = getNotifyParentProcessFn();
+util.inherits(Inspector, EventEmitter);
 
-notifyParentProcess({
-	event: 'SERVER.LAUNCHING',
-	version: packageJson.version
-});
-
-var debugServer = new DebugServer();
-
-debugServer.on('error', onError);
-debugServer.on('listening', onListening);
-
-debugServer.on(
-	'close',
-	function() {
-		process.exit();
-	}
-);
-
-debugServer.start(config);
-
-debugServer.wsServer.sockets.on(
-	'connection',
-	function(connection) {
-		connection.on('message', function(data) {
-			var message = JSON.parse(data);
-			
-			if (message.method === 'Runtime.enable') {
-				notifyParentProcess({
-					event: 'SERVER.CONNECTED'
-				});
-			}
-		});
-	}
-);
-
-function onError(err) {
-	notifyParentProcess({
-		event: 'SERVER.ERROR',
-		error: err,
-		message: util.format(
-			'Cannot start the server at %s:%s. Error: %s.',
-			config.webHost || '0.0.0.0',
-			config.webPort,
-			err.message || err
-		)
-	});
-}
-
-function onListening() {
-	var address = this.address();
+Inspector.prototype.launch = function(params) {
+	var me = this;
 	
-	notifyParentProcess({
-		event: 'SERVER.LISTENING',
-		address: address
+	return Q.fcall(function() {
+		var deferred = Q.defer();
+		
+		try {
+			require.resolve('node-inspector/bin/inspector');
+		}
+		catch (e) {
+			throw new Error('Unable to locate node-inspector package.');
+		}
+		
+		me.on(
+			'listening',
+			function(url) {
+				deferred.resolve(url);
+			}
+		);
+		
+		me.on(
+			'error',
+			function() {
+				deferred.reject();
+			}
+		);
+		
+		me._launch(params);
+		
+		return deferred.promise;
 	});
-}
+};
 
-function getNotifyParentProcessFn() {
-	if (!process.send) {
-		return function(msg) {};
+Inspector.prototype._launch = function(params) {
+	var args = [];
+	
+	for (var key in params) {
+		args.push('--' + key, params[key]);
 	}
+	
+	var child = child_process.fork(
+		path.join(__dirname, 'inspector-bin.js'),
+		args
+	);
+	
+	var me = this;
+	
+	child.on(
+		'message',
+		function(data) {
+			if (data.event === 'SERVER.LAUNCHING') {
+				me.emit('launching', data.version);
+			}
+			else if (data.event === 'SERVER.LISTENING') {
+				me.emit('listening', data.address.url);
+			}
+			else if (data.event === 'SERVER.CONNECTED') {
+				me.emit('connected');
+			}
+			else if (data.event === 'SERVER.ERROR') {
+				var message = data.message;
+				
+				if (error.code === 'EADDRINUSE') {
+					message += '\nThere is another process already listening at this address.';
+					message += '\nSpecify `inspectorArgs: { "web-port": port }` to use a different port.';
+				}
+				
+				me.emit('error', message);
+			}
+		}
+	);
+	
+	child.on(
+		'exit',
+		function(code) {
+			if (code != 0) {
+				me.emit('error', 'Inspector terminated with error code: ' + code);
+			}
+			
+			me.emit('exit');
+		}
+	);
+};
 
-	return function(msg) {
-		process.send(msg);
-	};
-}
+Inspector.prototype.connect = function() {
+	var deferred = Q.defer();
+	
+	this.on(
+		'connected',
+		function() {
+			deferred.resolve();
+		}
+	);
+	
+	this.on(
+		'error',
+		function() {
+			deferred.reject();
+		}
+	);
+	
+	return deferred.promise;
+};
+
+module.exports = {
+	Inspector: Inspector
+};
