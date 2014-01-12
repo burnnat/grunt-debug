@@ -1,5 +1,6 @@
 grunt-debug
 ===========
+[![NPM version](https://badge.fury.io/js/grunt-debug.png)](http://badge.fury.io/js/grunt-debug)
 
 A grunt task to enable debugging for any subsequent tasks.
 
